@@ -1,0 +1,5 @@
+{
+  "name": "Jail Cell Crank 3D",
+  "description": "A 3D incremental game where you turn a crank in a jail cell to earn your freedom.",
+  "requestFramePermissions": []
+}

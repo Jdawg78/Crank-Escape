@@ -1,0 +1,49 @@
+<div id="ui">
+    <div id="top-left" class="hud">
+        Cranks: <span id="crank-count">{{ Math.floor(revolutions * 8).toLocaleString() }}</span><br>
+        <span id="goal" [style.color]="revolutions >= 1000000 ? '#0f0' : '#aaa'">
+            {{ revolutions >= 1000000 ? 'GOAL REACHED! YOU ARE FREE!' : 'Goal: 1,000,000' }}
+        </span>
+    </div>
+    <div id="top-right" class="hud">
+        Coins: <span id="coin-count">{{ Math.floor(coins).toLocaleString() }}</span>
+    </div>
+    <div id="crosshair" [style.transform]="crosshairTransform" [style.background]="crosshairBg"></div>
+    <div id="tooltip" [style.display]="tooltipDisplay">{{ tooltipText }}</div>
+</div>
+
+<div id="mobile-controls" [style.display]="isMobile && isLocked ? 'block' : 'none'">
+    <div id="joystick-base" [style.display]="joyBaseDisplay" [style.left.px]="joyBaseLeft" [style.top.px]="joyBaseTop">
+        <div id="joystick-knob" [style.transform]="joyKnobTransform"></div>
+    </div>
+    <div id="mobile-hint" [style.display]="mobileHintDisplay">Drag Left side to Move<br>Drag Right side to Look<br>Tap Right side to Interact</div>
+</div>
+
+<div id="blocker" [style.display]="!isLocked ? 'flex' : 'none'">
+    <div id="instructions" (click)="lockPointer()">
+        <span style="font-size:36px; color: #fff;">JAIL CELL CRANK</span><br><br>
+        Click/Tap to Play<br><br>
+        <span id="control-text" style="font-size:16px; color:#aaa;">
+            {{ isMobile ? 'Drag left to move | Drag right to look | Tap right to interact' : 'WASD to Move | Mouse to Look | Click objects to interact' }}
+        </span>
+        
+        <!-- Sound Upload UI -->
+        <div class="mt-8 p-4 bg-gray-800 rounded-lg text-sm text-left max-w-md mx-auto" (click)="$event.stopPropagation()">
+            <h3 class="text-lg font-bold mb-2 text-yellow-400">Custom Sounds (Optional)</h3>
+            <div class="mb-2">
+                <label class="block text-gray-300">Crank Sound:</label>
+                <input type="file" accept="audio/*" (change)="onSoundUpload('crank', $event)" class="text-xs">
+            </div>
+            <div class="mb-2">
+                <label class="block text-gray-300">Buy Upgrade Sound:</label>
+                <input type="file" accept="audio/*" (change)="onSoundUpload('buy', $event)" class="text-xs">
+            </div>
+            <div class="mb-2">
+                <label class="block text-gray-300">Goal Reached Sound:</label>
+                <input type="file" accept="audio/*" (change)="onSoundUpload('goal', $event)" class="text-xs">
+            </div>
+        </div>
+    </div>
+</div>
+
+<div #canvasContainer class="w-full h-full absolute top-0 left-0 z-0"></div>
