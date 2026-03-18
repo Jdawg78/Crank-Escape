@@ -1,28 +1,62 @@
-import { Injectable } from '@angular/core';
+import { Injectable, Inject, PLATFORM_ID } from '@angular/core';
+import { isPlatformBrowser } from '@angular/common';
 
 @Injectable({ providedIn: 'root' })
 export class AudioService {
   private sounds: Record<string, HTMLAudioElement> = {};
   private audioContext: AudioContext | null = null;
+  private useProceduralFallback: Record<string, boolean> = {};
 
-  loadSound(name: string, file: File) {
-    const url = URL.createObjectURL(file);
-    const audio = new Audio(url);
+  constructor(@Inject(PLATFORM_ID) private platformId: Object) {
+    if (isPlatformBrowser(this.platformId)) {
+      // Pre-load sounds from the public/sounds directory
+      this.initSound('crank', '/sounds/Metal Crank Grinding Sound.mp3');
+      this.initSound('buy', '/sounds/buy.mp3');
+      this.initSound('goal', '/sounds/goal.mp3');
+    }
+  }
+
+  private initSound(name: string, url: string) {
+    const audio = new Audio();
+    audio.src = url;
+    
+    // Default to procedural until we know the file loaded successfully
+    this.useProceduralFallback[name] = true;
+
+    audio.addEventListener('canplaythrough', () => {
+      this.useProceduralFallback[name] = false;
+    });
+    
+    audio.addEventListener('error', () => {
+      this.useProceduralFallback[name] = true;
+    });
+
+    audio.load();
     this.sounds[name] = audio;
   }
 
   playSound(name: string) {
+    if (!isPlatformBrowser(this.platformId)) return;
+    
+    if (this.useProceduralFallback[name]) {
+      this.playProcedural(name);
+      return;
+    }
+
     const audio = this.sounds[name];
     if (audio) {
       audio.currentTime = 0;
-      audio.play().catch(e => console.error('Audio play failed:', e));
+      audio.play().catch(e => {
+        console.error('Audio play failed:', e);
+        this.playProcedural(name);
+      });
     } else {
-      // Fallback procedural sound if not uploaded
       this.playProcedural(name);
     }
   }
 
   private playProcedural(name: string) {
+    if (!isPlatformBrowser(this.platformId)) return;
     if (!this.audioContext) {
         this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
     }

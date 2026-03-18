@@ -1,7 +1,7 @@
-import { Component, ElementRef, ViewChild, AfterViewInit, OnDestroy, HostListener, ChangeDetectorRef } from '@angular/core';
+import { Component, ElementRef, ViewChild, AfterViewInit, OnDestroy, HostListener, ChangeDetectorRef, Inject, PLATFORM_ID } from '@angular/core';
 import * as THREE from 'three';
 import { AudioService } from './audio.service';
-import { CommonModule } from '@angular/common';
+import { CommonModule, isPlatformBrowser } from '@angular/common';
 
 @Component({
   selector: 'app-root',
@@ -25,7 +25,7 @@ export class App implements AfterViewInit, OnDestroy {
   costs = { power: 10, multi: 50, energy: 500, bribe: 1000, goon: 2500 };
 
   // UI State
-  isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || navigator.maxTouchPoints > 0;
+  isMobile = false;
   isLocked = false;
   
   crosshairTransform = 'translate(-50%, -50%) scale(1)';
@@ -51,6 +51,10 @@ export class App implements AfterViewInit, OnDestroy {
   ledTexture!: THREE.CanvasTexture;
   ledCtx!: CanvasRenderingContext2D;
   ledCanvas!: HTMLCanvasElement;
+  
+  vendingTexture!: THREE.CanvasTexture;
+  vendingCtx!: CanvasRenderingContext2D;
+  vendingCanvas!: HTMLCanvasElement;
 
   // Controls
   moveForward = false;
@@ -65,7 +69,7 @@ export class App implements AfterViewInit, OnDestroy {
 
   targetRotation = 0;
   currentRotation = 0;
-  prevTime = performance.now();
+  prevTime = 0;
 
   // Mobile Touch
   leftTouchId: number | null = null;
@@ -84,13 +88,26 @@ export class App implements AfterViewInit, OnDestroy {
   particleCount = 200;
   particlePositions!: Float32Array;
   particleVelocities!: Float32Array;
+  particleLifetimes!: Float32Array;
   activeParticles = 0;
 
-  constructor(private audioService: AudioService, private cdr: ChangeDetectorRef) {}
+  constructor(
+    private audioService: AudioService, 
+    private cdr: ChangeDetectorRef,
+    @Inject(PLATFORM_ID) private platformId: Object
+  ) {
+    if (isPlatformBrowser(this.platformId)) {
+      this.isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || navigator.maxTouchPoints > 0;
+      this.prevTime = performance.now();
+    }
+  }
 
   ngAfterViewInit() {
+    if (!isPlatformBrowser(this.platformId)) return;
+
     this.initThreeJS();
     this.updateLedSign();
+    this.updateVendingSign();
     this.animate();
 
     this.autoCrankInterval = setInterval(() => {
@@ -100,6 +117,7 @@ export class App implements AfterViewInit, OnDestroy {
         this.coins += this.passiveCoins;
         this.targetRotation -= (Math.PI * 2) * this.autoCrank;
         this.updateLedSign();
+        this.updateVendingSign();
         this.cdr.detectChanges();
       }
     }, 1000);
@@ -108,18 +126,12 @@ export class App implements AfterViewInit, OnDestroy {
   }
 
   ngOnDestroy() {
+    if (!isPlatformBrowser(this.platformId)) return;
     cancelAnimationFrame(this.animationFrameId);
     clearInterval(this.autoCrankInterval);
     document.removeEventListener('pointerlockchange', this.onPointerLockChange);
     if (this.renderer) {
       this.renderer.dispose();
-    }
-  }
-
-  onSoundUpload(type: string, event: Event) {
-    const input = event.target as HTMLInputElement;
-    if (input.files && input.files.length > 0) {
-      this.audioService.loadSound(type, input.files[0]);
     }
   }
 
@@ -222,11 +234,11 @@ export class App implements AfterViewInit, OnDestroy {
 
     // Vending Machine
     const vendingGroup = new THREE.Group();
-    vendingGroup.position.set(7.25, 2, 0);
+    vendingGroup.position.set(7.25, 2.5, 0);
     vendingGroup.rotation.y = -Math.PI / 2;
 
     const vmBody = new THREE.Mesh(
-      new THREE.BoxGeometry(2, 4, 1.5),
+      new THREE.BoxGeometry(4.5, 5, 1.5),
       new THREE.MeshStandardMaterial({ color: 0x551111, roughness: 0.6 })
     );
     vmBody.castShadow = true;
@@ -234,47 +246,53 @@ export class App implements AfterViewInit, OnDestroy {
     vendingGroup.add(vmBody);
 
     const vmGlass = new THREE.Mesh(
-      new THREE.PlaneGeometry(1.6, 2.5),
+      new THREE.PlaneGeometry(4.1, 2.0),
       new THREE.MeshStandardMaterial({ color: 0x88ccff, roughness: 0.1, transparent: true, opacity: 0.3 })
     );
-    vmGlass.position.set(0, 0.2, 0.76);
+    vmGlass.position.set(0, -0.5, 0.76);
     vendingGroup.add(vmGlass);
 
+    this.vendingCanvas = document.createElement('canvas');
+    this.vendingCanvas.width = 1024;
+    this.vendingCanvas.height = 625;
+    this.vendingCtx = this.vendingCanvas.getContext('2d')!;
+    this.vendingTexture = new THREE.CanvasTexture(this.vendingCanvas);
+
     const vmPanel = new THREE.Mesh(
-      new THREE.PlaneGeometry(1.6, 1.0),
-      new THREE.MeshBasicMaterial({ color: 0xffddaa })
+      new THREE.PlaneGeometry(4.1, 2.5),
+      new THREE.MeshBasicMaterial({ map: this.vendingTexture })
     );
-    vmPanel.position.set(0, 1.5, 0.76);
+    vmPanel.position.set(0, 1.25, 0.76);
     vendingGroup.add(vmPanel);
 
     const btnGeo = new THREE.BoxGeometry(0.3, 0.3, 0.1);
 
     const btnPowerMesh = new THREE.Mesh(btnGeo, new THREE.MeshStandardMaterial({ color: 0xff4444 }));
-    btnPowerMesh.position.set(-0.5, 1.7, 0.8);
+    btnPowerMesh.position.set(-1.5, 2.1, 0.8);
     btnPowerMesh.userData = { type: 'upgrade_power', getName: () => `Buy WD-40 (+Power) - ${this.costs.power} Coins` };
     vendingGroup.add(btnPowerMesh);
     this.interactables.push(btnPowerMesh);
 
     const btnMultiMesh = new THREE.Mesh(btnGeo, new THREE.MeshStandardMaterial({ color: 0x44ff44 }));
-    btnMultiMesh.position.set(0, 1.7, 0.8);
+    btnMultiMesh.position.set(-1.5, 1.7, 0.8);
     btnMultiMesh.userData = { type: 'upgrade_multi', getName: () => `Buy Snacks (x2 Coins) - ${this.costs.multi} Coins` };
     vendingGroup.add(btnMultiMesh);
     this.interactables.push(btnMultiMesh);
 
     const btnEnergyMesh = new THREE.Mesh(btnGeo, new THREE.MeshStandardMaterial({ color: 0xffff44 }));
-    btnEnergyMesh.position.set(0.5, 1.7, 0.8);
+    btnEnergyMesh.position.set(-1.5, 1.3, 0.8);
     btnEnergyMesh.userData = { type: 'upgrade_energy', getName: () => `Buy Energy Drink (+5 Power) - ${this.costs.energy} Coins` };
     vendingGroup.add(btnEnergyMesh);
     this.interactables.push(btnEnergyMesh);
 
     const btnBribeMesh = new THREE.Mesh(btnGeo, new THREE.MeshStandardMaterial({ color: 0xff44ff }));
-    btnBribeMesh.position.set(-0.25, 1.3, 0.8);
+    btnBribeMesh.position.set(-1.5, 0.9, 0.8);
     btnBribeMesh.userData = { type: 'upgrade_bribe', getName: () => `Bribe Guard (+10 Coins/sec) - ${this.costs.bribe} Coins` };
     vendingGroup.add(btnBribeMesh);
     this.interactables.push(btnBribeMesh);
 
     const btnGoonMesh = new THREE.Mesh(btnGeo, new THREE.MeshStandardMaterial({ color: 0xff8844 }));
-    btnGoonMesh.position.set(0.25, 1.3, 0.8);
+    btnGoonMesh.position.set(-1.5, 0.5, 0.8);
     btnGoonMesh.userData = { type: 'upgrade_goon', getName: () => `Hire Goon (+5 Rev/sec) - ${this.costs.goon} Coins` };
     vendingGroup.add(btnGoonMesh);
     this.interactables.push(btnGoonMesh);
@@ -285,11 +303,13 @@ export class App implements AfterViewInit, OnDestroy {
     this.particleGeometry = new THREE.BufferGeometry();
     this.particlePositions = new Float32Array(this.particleCount * 3);
     this.particleVelocities = new Float32Array(this.particleCount * 3);
+    this.particleLifetimes = new Float32Array(this.particleCount);
     this.particleGeometry.setAttribute('position', new THREE.BufferAttribute(this.particlePositions, 3));
+    this.particleGeometry.setDrawRange(0, 0);
     
     this.particleMaterial = new THREE.PointsMaterial({
       color: 0xffaa00,
-      size: 0.1,
+      size: 0.15,
       transparent: true,
       opacity: 0.8,
       blending: THREE.AdditiveBlending
@@ -350,6 +370,30 @@ export class App implements AfterViewInit, OnDestroy {
       this.ledCtx.fillText(Math.floor(this.revolutions).toLocaleString(), 512, 320);
     }
     this.ledTexture.needsUpdate = true;
+  }
+
+  updateVendingSign() {
+    if (!this.vendingCtx) return;
+    this.vendingCtx.fillStyle = '#ffddaa';
+    this.vendingCtx.fillRect(0, 0, this.vendingCanvas.width, this.vendingCanvas.height);
+    this.vendingCtx.textAlign = 'left';
+    this.vendingCtx.textBaseline = 'middle';
+    this.vendingCtx.font = 'bold 32px Courier New';
+
+    const items = [
+      { name: 'WD-40 (+Power)', cost: this.costs.power, y: 100 },
+      { name: 'Snacks (x2 Coins)', cost: this.costs.multi, y: 200 },
+      { name: 'Energy Drink (+5 Power)', cost: this.costs.energy, y: 300 },
+      { name: 'Bribe Guard (+10 Coins/s)', cost: this.costs.bribe, y: 400 },
+      { name: 'Hire Goon (+5 Rev/s)', cost: this.costs.goon, y: 500 }
+    ];
+
+    items.forEach(item => {
+      this.vendingCtx!.fillStyle = this.coins >= item.cost ? '#115511' : '#551111';
+      this.vendingCtx!.fillText(`${item.name} - ${item.cost} Coins`, 200, item.y);
+    });
+
+    this.vendingTexture.needsUpdate = true;
   }
 
   lockPointer() {
@@ -499,9 +543,11 @@ export class App implements AfterViewInit, OnDestroy {
       this.particlePositions[idx + 1] = position.y + (Math.random() - 0.5) * 0.5;
       this.particlePositions[idx + 2] = position.z + (Math.random() - 0.5) * 0.5;
       
-      this.particleVelocities[idx] = (Math.random() - 0.5) * 2;
-      this.particleVelocities[idx + 1] = Math.random() * 2 + 1;
-      this.particleVelocities[idx + 2] = (Math.random() - 0.5) * 2;
+      this.particleVelocities[idx] = (Math.random() - 0.5) * 4;
+      this.particleVelocities[idx + 1] = Math.random() * 4 + 2;
+      this.particleVelocities[idx + 2] = (Math.random() - 0.5) * 4;
+      
+      this.particleLifetimes[this.activeParticles] = 2.0 + Math.random() * 1.5; // 2 to 3.5 seconds
       
       this.activeParticles++;
     }
@@ -544,6 +590,7 @@ export class App implements AfterViewInit, OnDestroy {
         }
         
         this.updateLedSign();
+        this.updateVendingSign();
         this.cdr.detectChanges();
       }
     }
@@ -607,13 +654,25 @@ export class App implements AfterViewInit, OnDestroy {
     if (this.activeParticles > 0) {
       for (let i = 0; i < this.activeParticles; i++) {
         const idx = i * 3;
+        
+        this.particleLifetimes[i] -= delta;
+        
+        this.particleVelocities[idx + 1] -= 9.8 * delta; // Gravity
+        
         this.particlePositions[idx] += this.particleVelocities[idx] * delta;
         this.particlePositions[idx + 1] += this.particleVelocities[idx + 1] * delta;
         this.particlePositions[idx + 2] += this.particleVelocities[idx + 2] * delta;
         
-        this.particleVelocities[idx + 1] -= 5 * delta; // Gravity
+        // Floor collision
+        if (this.particlePositions[idx + 1] < 0.05) {
+          this.particlePositions[idx + 1] = 0.05;
+          this.particleVelocities[idx + 1] *= -0.6; // Bounce
+          this.particleVelocities[idx] *= 0.8; // Friction
+          this.particleVelocities[idx + 2] *= 0.8; // Friction
+        }
         
-        if (this.particlePositions[idx + 1] < 0) {
+        // Remove particle if lifetime is over
+        if (this.particleLifetimes[i] <= 0) {
           // Remove particle by swapping with last active
           this.activeParticles--;
           const lastIdx = this.activeParticles * 3;
@@ -623,11 +682,13 @@ export class App implements AfterViewInit, OnDestroy {
           this.particleVelocities[idx] = this.particleVelocities[lastIdx];
           this.particleVelocities[idx + 1] = this.particleVelocities[lastIdx + 1];
           this.particleVelocities[idx + 2] = this.particleVelocities[lastIdx + 2];
+          this.particleLifetimes[i] = this.particleLifetimes[this.activeParticles];
           i--; // Re-check this index
         }
       }
       this.particleGeometry.attributes['position'].needsUpdate = true;
     }
+    this.particleGeometry.setDrawRange(0, this.activeParticles);
 
     if (this.renderer && this.scene && this.camera) {
       this.renderer.render(this.scene, this.camera);

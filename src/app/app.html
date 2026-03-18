@@ -26,23 +26,6 @@
         <span id="control-text" style="font-size:16px; color:#aaa;">
             {{ isMobile ? 'Drag left to move | Drag right to look | Tap right to interact' : 'WASD to Move | Mouse to Look | Click objects to interact' }}
         </span>
-        
-        <!-- Sound Upload UI -->
-        <div class="mt-8 p-4 bg-gray-800 rounded-lg text-sm text-left max-w-md mx-auto" (click)="$event.stopPropagation()">
-            <h3 class="text-lg font-bold mb-2 text-yellow-400">Custom Sounds (Optional)</h3>
-            <div class="mb-2">
-                <label class="block text-gray-300">Crank Sound:</label>
-                <input type="file" accept="audio/*" (change)="onSoundUpload('crank', $event)" class="text-xs">
-            </div>
-            <div class="mb-2">
-                <label class="block text-gray-300">Buy Upgrade Sound:</label>
-                <input type="file" accept="audio/*" (change)="onSoundUpload('buy', $event)" class="text-xs">
-            </div>
-            <div class="mb-2">
-                <label class="block text-gray-300">Goal Reached Sound:</label>
-                <input type="file" accept="audio/*" (change)="onSoundUpload('goal', $event)" class="text-xs">
-            </div>
-        </div>
     </div>
 </div>
 
