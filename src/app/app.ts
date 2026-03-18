@@ -1,5 +1,6 @@
 import { Component, ElementRef, ViewChild, AfterViewInit, OnDestroy, HostListener, ChangeDetectorRef, Inject, PLATFORM_ID } from '@angular/core';
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { AudioService } from './audio.service';
 import { CommonModule, isPlatformBrowser } from '@angular/common';
 
@@ -46,15 +47,12 @@ export class App implements AfterViewInit, OnDestroy {
   animationFrameId: number = 0;
   
   interactables: THREE.Mesh[] = [];
+  upgradeMarkers: THREE.Mesh[] = [];
   crankAssembly!: THREE.Group;
   rotator!: THREE.Group;
   ledTexture!: THREE.CanvasTexture;
   ledCtx!: CanvasRenderingContext2D;
   ledCanvas!: HTMLCanvasElement;
-  
-  vendingTexture!: THREE.CanvasTexture;
-  vendingCtx!: CanvasRenderingContext2D;
-  vendingCanvas!: HTMLCanvasElement;
 
   // Controls
   moveForward = false;
@@ -107,7 +105,6 @@ export class App implements AfterViewInit, OnDestroy {
 
     this.initThreeJS();
     this.updateLedSign();
-    this.updateVendingSign();
     this.animate();
 
     this.autoCrankInterval = setInterval(() => {
@@ -117,7 +114,6 @@ export class App implements AfterViewInit, OnDestroy {
         this.coins += this.passiveCoins;
         this.targetRotation -= (Math.PI * 2) * this.autoCrank;
         this.updateLedSign();
-        this.updateVendingSign();
         this.cdr.detectChanges();
       }
     }, 1000);
@@ -234,68 +230,62 @@ export class App implements AfterViewInit, OnDestroy {
 
     // Vending Machine
     const vendingGroup = new THREE.Group();
-    vendingGroup.position.set(7.25, 2.5, 0);
+    vendingGroup.position.set(7.25, 0, 0); // Base at floor
     vendingGroup.rotation.y = -Math.PI / 2;
+    this.scene.add(vendingGroup);
 
-    const vmBody = new THREE.Mesh(
-      new THREE.BoxGeometry(4.5, 5, 1.5),
-      new THREE.MeshStandardMaterial({ color: 0x551111, roughness: 0.6 })
-    );
-    vmBody.castShadow = true;
-    vmBody.receiveShadow = true;
-    vendingGroup.add(vmBody);
+    const loader = new GLTFLoader();
+    loader.load('/vending.glb', (gltf: any) => {
+      const model = gltf.scene;
+      // Scale it if needed, assuming it's roughly 1x1x1 or similar
+      // Let's try to fit it to the previous size (4.5 wide, 5 high, 1.5 deep)
+      // We'll calculate its bounding box to scale it correctly
+      const bbox = new THREE.Box3().setFromObject(model);
+      const size = bbox.getSize(new THREE.Vector3());
+      const scaleX = 4.5 / size.x;
+      const scaleY = 5.0 / size.y;
+      const scaleZ = 1.5 / size.z;
+      const scale = Math.min(scaleX, scaleY, scaleZ);
+      model.scale.set(scale, scale, scale);
+      
+      // Center it horizontally/depth-wise, but keep base at y=0
+      model.position.y = -bbox.min.y * scale;
+      
+      model.traverse((child: any) => {
+        if (child instanceof THREE.Mesh) {
+          child.castShadow = true;
+          child.receiveShadow = true;
+        }
+      });
+      vendingGroup.add(model);
+    }, undefined, (error: any) => {
+      console.error('Error loading vending.glb:', error);
+      // Fallback to procedural body if GLB fails
+      const vmBody = new THREE.Mesh(
+        new THREE.BoxGeometry(4.5, 5, 1.5),
+        new THREE.MeshStandardMaterial({ color: 0x551111, roughness: 0.6 })
+      );
+      vmBody.position.y = 2.5;
+      vmBody.castShadow = true;
+      vmBody.receiveShadow = true;
+      vendingGroup.add(vmBody);
+    });
 
-    const vmGlass = new THREE.Mesh(
-      new THREE.PlaneGeometry(4.1, 2.0),
-      new THREE.MeshStandardMaterial({ color: 0x88ccff, roughness: 0.1, transparent: true, opacity: 0.3 })
-    );
-    vmGlass.position.set(0, -0.5, 0.76);
-    vendingGroup.add(vmGlass);
+    const btnGeo = new THREE.SphereGeometry(0.12, 16, 16);
+    const createMarker = (color: number, y: number, type: string, nameFn: () => string) => {
+      const mesh = new THREE.Mesh(btnGeo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.8 }));
+      mesh.position.set(1.5, y, 1.1); // Right side of the machine, slightly in front
+      mesh.userData = { type, getName: nameFn, baseY: y };
+      vendingGroup.add(mesh);
+      this.interactables.push(mesh);
+      this.upgradeMarkers.push(mesh);
+    };
 
-    this.vendingCanvas = document.createElement('canvas');
-    this.vendingCanvas.width = 1024;
-    this.vendingCanvas.height = 625;
-    this.vendingCtx = this.vendingCanvas.getContext('2d')!;
-    this.vendingTexture = new THREE.CanvasTexture(this.vendingCanvas);
-
-    const vmPanel = new THREE.Mesh(
-      new THREE.PlaneGeometry(4.1, 2.5),
-      new THREE.MeshBasicMaterial({ map: this.vendingTexture })
-    );
-    vmPanel.position.set(0, 1.25, 0.76);
-    vendingGroup.add(vmPanel);
-
-    const btnGeo = new THREE.BoxGeometry(0.3, 0.3, 0.1);
-
-    const btnPowerMesh = new THREE.Mesh(btnGeo, new THREE.MeshStandardMaterial({ color: 0xff4444 }));
-    btnPowerMesh.position.set(-1.5, 2.1, 0.8);
-    btnPowerMesh.userData = { type: 'upgrade_power', getName: () => `Buy WD-40 (+Power) - ${this.costs.power} Coins` };
-    vendingGroup.add(btnPowerMesh);
-    this.interactables.push(btnPowerMesh);
-
-    const btnMultiMesh = new THREE.Mesh(btnGeo, new THREE.MeshStandardMaterial({ color: 0x44ff44 }));
-    btnMultiMesh.position.set(-1.5, 1.7, 0.8);
-    btnMultiMesh.userData = { type: 'upgrade_multi', getName: () => `Buy Snacks (x2 Coins) - ${this.costs.multi} Coins` };
-    vendingGroup.add(btnMultiMesh);
-    this.interactables.push(btnMultiMesh);
-
-    const btnEnergyMesh = new THREE.Mesh(btnGeo, new THREE.MeshStandardMaterial({ color: 0xffff44 }));
-    btnEnergyMesh.position.set(-1.5, 1.3, 0.8);
-    btnEnergyMesh.userData = { type: 'upgrade_energy', getName: () => `Buy Energy Drink (+5 Power) - ${this.costs.energy} Coins` };
-    vendingGroup.add(btnEnergyMesh);
-    this.interactables.push(btnEnergyMesh);
-
-    const btnBribeMesh = new THREE.Mesh(btnGeo, new THREE.MeshStandardMaterial({ color: 0xff44ff }));
-    btnBribeMesh.position.set(-1.5, 0.9, 0.8);
-    btnBribeMesh.userData = { type: 'upgrade_bribe', getName: () => `Bribe Guard (+10 Coins/sec) - ${this.costs.bribe} Coins` };
-    vendingGroup.add(btnBribeMesh);
-    this.interactables.push(btnBribeMesh);
-
-    const btnGoonMesh = new THREE.Mesh(btnGeo, new THREE.MeshStandardMaterial({ color: 0xff8844 }));
-    btnGoonMesh.position.set(-1.5, 0.5, 0.8);
-    btnGoonMesh.userData = { type: 'upgrade_goon', getName: () => `Hire Goon (+5 Rev/sec) - ${this.costs.goon} Coins` };
-    vendingGroup.add(btnGoonMesh);
-    this.interactables.push(btnGoonMesh);
+    createMarker(0xff4444, 3.8, 'upgrade_power', () => `Buy WD-40 (+Power) - ${this.costs.power} Coins`);
+    createMarker(0x44ff44, 3.3, 'upgrade_multi', () => `Buy Snacks (x2 Coins) - ${this.costs.multi} Coins`);
+    createMarker(0xffff44, 2.8, 'upgrade_energy', () => `Buy Energy Drink (+5 Power) - ${this.costs.energy} Coins`);
+    createMarker(0xff44ff, 2.3, 'upgrade_bribe', () => `Bribe Guard (+10 Coins/sec) - ${this.costs.bribe} Coins`);
+    createMarker(0xff8844, 1.8, 'upgrade_goon', () => `Hire Goon (+5 Rev/sec) - ${this.costs.goon} Coins`);
 
     this.scene.add(vendingGroup);
 
@@ -370,30 +360,6 @@ export class App implements AfterViewInit, OnDestroy {
       this.ledCtx.fillText(Math.floor(this.revolutions).toLocaleString(), 512, 320);
     }
     this.ledTexture.needsUpdate = true;
-  }
-
-  updateVendingSign() {
-    if (!this.vendingCtx) return;
-    this.vendingCtx.fillStyle = '#ffddaa';
-    this.vendingCtx.fillRect(0, 0, this.vendingCanvas.width, this.vendingCanvas.height);
-    this.vendingCtx.textAlign = 'left';
-    this.vendingCtx.textBaseline = 'middle';
-    this.vendingCtx.font = 'bold 32px Courier New';
-
-    const items = [
-      { name: 'WD-40 (+Power)', cost: this.costs.power, y: 100 },
-      { name: 'Snacks (x2 Coins)', cost: this.costs.multi, y: 200 },
-      { name: 'Energy Drink (+5 Power)', cost: this.costs.energy, y: 300 },
-      { name: 'Bribe Guard (+10 Coins/s)', cost: this.costs.bribe, y: 400 },
-      { name: 'Hire Goon (+5 Rev/s)', cost: this.costs.goon, y: 500 }
-    ];
-
-    items.forEach(item => {
-      this.vendingCtx!.fillStyle = this.coins >= item.cost ? '#115511' : '#551111';
-      this.vendingCtx!.fillText(`${item.name} - ${item.cost} Coins`, 200, item.y);
-    });
-
-    this.vendingTexture.needsUpdate = true;
   }
 
   lockPointer() {
@@ -562,7 +528,6 @@ export class App implements AfterViewInit, OnDestroy {
       const dist = intersects[0].distance;
       if (dist < 4.5) {
         const type = intersects[0].object.userData['type'];
-        let playedSound = false;
         
         if (type === 'crank') {
           const wasGoalReached = this.revolutions >= 1000000;
@@ -571,26 +536,24 @@ export class App implements AfterViewInit, OnDestroy {
           this.targetRotation -= (Math.PI / 4) * this.crankPower;
           this.audioService.playSound('crank');
           this.spawnParticles(intersects[0].point, 5, 0xffaa00);
-          playedSound = true;
           
           if (!wasGoalReached && this.revolutions >= 1000000) {
               this.audioService.playSound('goal');
               this.spawnParticles(intersects[0].point, 50, 0x00ff00);
           }
         } else if (type === 'upgrade_power') {
-          if (this.coins >= this.costs.power) { this.coins -= this.costs.power; this.crankPower++; this.costs.power = Math.floor(this.costs.power * 1.5); this.audioService.playSound('buy'); this.spawnParticles(intersects[0].point, 10, 0xff4444); playedSound = true; }
+          if (this.coins >= this.costs.power) { this.coins -= this.costs.power; this.crankPower++; this.costs.power = Math.floor(this.costs.power * 1.5); this.audioService.playSound('buy'); this.spawnParticles(intersects[0].point, 10, 0xff4444); }
         } else if (type === 'upgrade_multi') {
-          if (this.coins >= this.costs.multi) { this.coins -= this.costs.multi; this.coinMultiplier++; this.costs.multi = Math.floor(this.costs.multi * 2.5); this.audioService.playSound('buy'); this.spawnParticles(intersects[0].point, 10, 0x44ff44); playedSound = true; }
+          if (this.coins >= this.costs.multi) { this.coins -= this.costs.multi; this.coinMultiplier++; this.costs.multi = Math.floor(this.costs.multi * 2.5); this.audioService.playSound('buy'); this.spawnParticles(intersects[0].point, 10, 0x44ff44); }
         } else if (type === 'upgrade_energy') {
-          if (this.coins >= this.costs.energy) { this.coins -= this.costs.energy; this.crankPower += 5; this.costs.energy = Math.floor(this.costs.energy * 1.6); this.audioService.playSound('buy'); this.spawnParticles(intersects[0].point, 10, 0xffff44); playedSound = true; }
+          if (this.coins >= this.costs.energy) { this.coins -= this.costs.energy; this.crankPower += 5; this.costs.energy = Math.floor(this.costs.energy * 1.6); this.audioService.playSound('buy'); this.spawnParticles(intersects[0].point, 10, 0xffff44); }
         } else if (type === 'upgrade_bribe') {
-          if (this.coins >= this.costs.bribe) { this.coins -= this.costs.bribe; this.passiveCoins += 10; this.costs.bribe = Math.floor(this.costs.bribe * 2.0); this.audioService.playSound('buy'); this.spawnParticles(intersects[0].point, 10, 0xff44ff); playedSound = true; }
+          if (this.coins >= this.costs.bribe) { this.coins -= this.costs.bribe; this.passiveCoins += 10; this.costs.bribe = Math.floor(this.costs.bribe * 2.0); this.audioService.playSound('buy'); this.spawnParticles(intersects[0].point, 10, 0xff44ff); }
         } else if (type === 'upgrade_goon') {
-          if (this.coins >= this.costs.goon) { this.coins -= this.costs.goon; this.autoCrank += 5; this.costs.goon = Math.floor(this.costs.goon * 1.8); this.audioService.playSound('buy'); this.spawnParticles(intersects[0].point, 10, 0xff8844); playedSound = true; }
+          if (this.coins >= this.costs.goon) { this.coins -= this.costs.goon; this.autoCrank += 5; this.costs.goon = Math.floor(this.costs.goon * 1.8); this.audioService.playSound('buy'); this.spawnParticles(intersects[0].point, 10, 0xff8844); }
         }
         
         this.updateLedSign();
-        this.updateVendingSign();
         this.cdr.detectChanges();
       }
     }
@@ -649,6 +612,10 @@ export class App implements AfterViewInit, OnDestroy {
     if (this.rotator) {
       this.rotator.rotation.y = this.currentRotation;
     }
+
+    this.upgradeMarkers.forEach((marker, i) => {
+      marker.position.y = marker.userData['baseY'] + Math.sin(time * 0.003 + i) * 0.05;
+    });
 
     // Update particles
     if (this.activeParticles > 0) {
