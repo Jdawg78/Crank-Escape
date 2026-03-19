@@ -95,6 +95,14 @@ export class AudioService {
       gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 1.0);
       osc.start();
       osc.stop(ctx.currentTime + 1.0);
+    } else if (name === 'error') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(150, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(50, ctx.currentTime + 0.5);
+      gain.gain.setValueAtTime(0.3, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.5);
     }
   }
 }

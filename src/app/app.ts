@@ -79,6 +79,20 @@ export class App implements AfterViewInit, OnDestroy {
 
   autoCrankInterval: any;
 
+  // Guard State
+  guardGroup!: THREE.Group;
+  guardLight!: THREE.SpotLight;
+  guardAudio!: THREE.PositionalAudio;
+  guardZ = -40; // Starts deep in the hallway
+  guardDirection = 1; // 1 for moving forward, -1 for moving backward
+  guardSpeed = 3.0;
+  guardState: 'patrolling' | 'catching' = 'patrolling';
+  lastCheckpoint = 0;
+  checkpointInterval = 50;
+  isCaught = false;
+  caughtTimer = 0;
+  lastCrankTime = 0;
+
   // Particles
   particles!: THREE.Points;
   particleGeometry!: THREE.BufferGeometry;
@@ -108,6 +122,8 @@ export class App implements AfterViewInit, OnDestroy {
     this.animate();
 
     this.autoCrankInterval = setInterval(() => {
+      if (this.isCaught) return; // Pause auto-crank while caught
+      
       if (this.autoCrank > 0 || this.passiveCoins > 0) {
         this.revolutions += this.autoCrank;
         this.coins += (this.autoCrank * 8) * this.coinMultiplier;
@@ -253,6 +269,114 @@ export class App implements AfterViewInit, OnDestroy {
     barsGroup.add(crossBar2);
 
     this.scene.add(barsGroup);
+
+    // Hallway (Outside the bars)
+    const hallwayGroup = new THREE.Group();
+    const hallMat = new THREE.MeshStandardMaterial({ map: this.createBrickTexture(), roughness: 0.9, side: THREE.DoubleSide });
+    
+    // Floor
+    const hallFloor = new THREE.Mesh(new THREE.PlaneGeometry(8, 60), hallMat);
+    hallFloor.rotation.x = -Math.PI / 2;
+    hallFloor.position.set(-12, 0, 0);
+    hallFloor.receiveShadow = true;
+    hallwayGroup.add(hallFloor);
+
+    // Ceiling
+    const hallCeiling = new THREE.Mesh(new THREE.PlaneGeometry(8, 60), hallMat);
+    hallCeiling.rotation.x = Math.PI / 2;
+    hallCeiling.position.set(-12, 12, 0);
+    hallCeiling.receiveShadow = true;
+    hallwayGroup.add(hallCeiling);
+
+    // Left Wall
+    const hallLeft = new THREE.Mesh(new THREE.PlaneGeometry(60, 12), hallMat);
+    hallLeft.rotation.y = Math.PI / 2;
+    hallLeft.position.set(-16, 6, 0);
+    hallLeft.receiveShadow = true;
+    hallwayGroup.add(hallLeft);
+
+    // Right Wall (Front part, z > 8)
+    const hallRightFront = new THREE.Mesh(new THREE.PlaneGeometry(22, 12), hallMat);
+    hallRightFront.rotation.y = -Math.PI / 2;
+    hallRightFront.position.set(-8, 6, 19);
+    hallRightFront.receiveShadow = true;
+    hallwayGroup.add(hallRightFront);
+
+    // Right Wall (Back part, z < -8)
+    const hallRightBack = new THREE.Mesh(new THREE.PlaneGeometry(22, 12), hallMat);
+    hallRightBack.rotation.y = -Math.PI / 2;
+    hallRightBack.position.set(-8, 6, -19);
+    hallRightBack.receiveShadow = true;
+    hallwayGroup.add(hallRightBack);
+
+    // Front Wall (z = 30)
+    const hallFront = new THREE.Mesh(new THREE.PlaneGeometry(8, 12), hallMat);
+    hallFront.rotation.y = Math.PI;
+    hallFront.position.set(-12, 6, 30);
+    hallFront.receiveShadow = true;
+    hallwayGroup.add(hallFront);
+
+    // Back Wall (z = -30)
+    const hallBack = new THREE.Mesh(new THREE.PlaneGeometry(8, 12), hallMat);
+    hallBack.position.set(-12, 6, -30);
+    hallBack.receiveShadow = true;
+    hallwayGroup.add(hallBack);
+
+    this.scene.add(hallwayGroup);
+
+    // Dim hallway lights
+    const hallLight1 = new THREE.PointLight(0x444433, 0.6, 25);
+    hallLight1.position.set(-12, 10, -20);
+    this.scene.add(hallLight1);
+
+    const hallLight2 = new THREE.PointLight(0x444433, 0.6, 25);
+    hallLight2.position.set(-12, 10, 20);
+    this.scene.add(hallLight2);
+
+    // Guard & Flashlight
+    this.guardGroup = new THREE.Group();
+    this.guardGroup.position.set(-12, 4, this.guardZ);
+    
+    // Guard Body (simple dark capsule)
+    const guardBody = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.8, 4, 4, 8),
+      new THREE.MeshStandardMaterial({ color: 0x050505, roughness: 1.0 })
+    );
+    this.guardGroup.add(guardBody);
+
+    // Flashlight Beam
+    this.guardLight = new THREE.SpotLight(0xffffff, 10.0, 40, Math.PI / 6, 0.5, 1);
+    this.guardLight.position.set(0, 1, 0); // Chest height
+    this.guardLight.castShadow = true;
+    this.guardLight.shadow.bias = -0.001;
+    this.guardGroup.add(this.guardLight);
+    this.guardGroup.add(this.guardLight.target);
+    
+    // Flashlight target points towards the cell
+    this.guardLight.target.position.set(12, -1, 0);
+
+    // Guard Audio (Footsteps)
+    const listener = new THREE.AudioListener();
+    this.camera.add(listener);
+    this.guardAudio = new THREE.PositionalAudio(listener);
+    
+    const audioLoader = new THREE.AudioLoader();
+    audioLoader.load('sounds/footsteps.mp3', (buffer) => {
+      this.guardAudio.setBuffer(buffer);
+      this.guardAudio.setRefDistance(5);
+      this.guardAudio.setMaxDistance(40);
+      this.guardAudio.setRolloffFactor(1);
+      this.guardAudio.setLoop(true);
+      this.guardAudio.setVolume(1.5);
+      if (this.isLocked) {
+        this.guardAudio.play();
+      }
+    }, undefined, (err) => {
+      console.warn('Failed to load footsteps.mp3', err);
+    });
+    this.guardGroup.add(this.guardAudio);
+
+    this.scene.add(this.guardGroup);
 
     // LED Sign
     this.ledCanvas = document.createElement('canvas');
@@ -438,21 +562,30 @@ export class App implements AfterViewInit, OnDestroy {
     this.ledCtx.fillStyle = '#00ff00';
     this.ledCtx.shadowColor = '#00ff00';
     this.ledCtx.shadowBlur = 20;
-    this.ledCtx.fillText('GOAL: 1,000,000 REVS', 512, 120);
+    this.ledCtx.fillText('GOAL: 1,000,000 REVS', 512, 100);
+
+    this.ledCtx.font = 'bold 40px Courier New';
+    this.ledCtx.fillStyle = '#aaaaaa';
+    this.ledCtx.shadowColor = 'transparent';
+    this.ledCtx.fillText(`CHECKPOINT: ${this.lastCheckpoint.toLocaleString()}`, 512, 180);
 
     this.ledCtx.font = 'bold 120px Courier New';
     if (this.revolutions >= 1000000) {
       this.ledCtx.fillStyle = '#00ff00';
-      this.ledCtx.fillText('FREEDOM!', 512, 320);
+      this.ledCtx.fillText('FREEDOM!', 512, 340);
     } else {
       this.ledCtx.fillStyle = '#ff2222';
       this.ledCtx.shadowColor = '#ff2222';
-      this.ledCtx.fillText(Math.floor(this.revolutions).toLocaleString(), 512, 320);
+      this.ledCtx.fillText(Math.floor(this.revolutions).toLocaleString(), 512, 340);
     }
     this.ledTexture.needsUpdate = true;
   }
 
   lockPointer() {
+    if (this.guardAudio && !this.guardAudio.isPlaying && this.guardAudio.buffer) {
+      this.guardAudio.play();
+    }
+    
     if (this.isMobile) {
       this.isLocked = true;
       this.cdr.detectChanges();
@@ -619,6 +752,25 @@ export class App implements AfterViewInit, OnDestroy {
     this.particleGeometry.attributes['position'].needsUpdate = true;
   }
 
+  catchPlayer() {
+    this.isCaught = true;
+    this.guardState = 'catching';
+    this.caughtTimer = performance.now();
+    
+    // Penalty
+    this.revolutions = this.lastCheckpoint;
+    
+    // Visual/Audio feedback
+    this.guardLight.color.setHex(0xff0000); // Turn light red
+    if (this.guardAudio && this.guardAudio.isPlaying) {
+      this.guardAudio.stop(); // Stop footsteps
+    }
+    this.audioService.playSound('error'); // Play error/caught sound if available
+    
+    this.updateLedSign();
+    this.cdr.detectChanges();
+  }
+
   fireInteraction() {
     this.raycaster.setFromCamera(this.centerPoint, this.camera);
     const intersects = this.raycaster.intersectObjects(this.interactables);
@@ -629,6 +781,9 @@ export class App implements AfterViewInit, OnDestroy {
         const type = intersects[0].object.userData['type'];
         
         if (type === 'crank') {
+          if (this.isCaught) return; // Cannot crank while caught
+          
+          this.lastCrankTime = performance.now();
           const wasGoalReached = this.revolutions >= 1000000;
           this.revolutions += 0.125 * this.crankPower;
           this.coins += 1 * this.coinMultiplier;
@@ -663,6 +818,55 @@ export class App implements AfterViewInit, OnDestroy {
     const time = performance.now();
     const delta = (time - this.prevTime) / 1000;
     this.prevTime = time;
+
+    // Checkpoint Logic
+    if (this.revolutions - this.lastCheckpoint >= this.checkpointInterval) {
+      this.lastCheckpoint = Math.floor(this.revolutions / this.checkpointInterval) * this.checkpointInterval;
+      this.updateLedSign();
+      this.cdr.detectChanges();
+    }
+
+    // Guard Patrol Logic
+    if (this.guardGroup && this.guardState === 'patrolling') {
+      this.guardZ += this.guardSpeed * this.guardDirection * delta;
+      
+      // Reverse direction at ends of hallway
+      if (this.guardZ > 35) {
+        this.guardZ = 35;
+        this.guardDirection = -1;
+      } else if (this.guardZ < -35) {
+        this.guardZ = -35;
+        this.guardDirection = 1;
+      }
+      
+      this.guardGroup.position.z = this.guardZ;
+
+      // Bobbing effect for flashlight
+      this.guardLight.position.y = 1 + Math.sin(time * 0.005) * 0.1;
+      this.guardLight.target.position.y = -1 + Math.sin(time * 0.005) * 0.2;
+
+      // Detection Logic
+      const isCranking = (time - this.lastCrankTime) < 500; // Cranking if clicked in last 500ms
+      const inDangerZone = Math.abs(this.guardZ) < 8; // Guard is in front of the cell
+
+      if (inDangerZone && isCranking && !this.isCaught) {
+        this.catchPlayer();
+      }
+    } else if (this.guardState === 'catching') {
+      // Guard caught player, look directly at them
+      this.guardLight.target.position.set(12, 2.4, -this.guardZ); // Point at camera
+      
+      if (time - this.caughtTimer > 2000) {
+        // Reset after 2 seconds
+        this.isCaught = false;
+        this.guardState = 'patrolling';
+        this.guardLight.target.position.set(12, -1, 0); // Point back down
+        this.guardLight.color.setHex(0xffffff); // Reset light color
+        if (this.guardAudio && !this.guardAudio.isPlaying && this.guardAudio.buffer) {
+          this.guardAudio.play();
+        }
+      }
+    }
 
     if (this.isLocked) {
       this.velocity.x -= this.velocity.x * 10.0 * delta;
