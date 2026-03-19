@@ -131,6 +131,47 @@ export class App implements AfterViewInit, OnDestroy {
     }
   }
 
+  createHangingLamp(x: number, y: number, z: number, targetX: number, targetY: number, targetZ: number) {
+    const lampGroup = new THREE.Group();
+    lampGroup.position.set(x, y, z);
+    
+    // Wire/Cord
+    const cord = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.02, 0.02, 4),
+      new THREE.MeshStandardMaterial({ color: 0x111111 })
+    );
+    cord.position.y = -2;
+    lampGroup.add(cord);
+
+    // Lamp Shade
+    const shade = new THREE.Mesh(
+      new THREE.ConeGeometry(0.8, 0.6, 16, 1, true),
+      new THREE.MeshStandardMaterial({ color: 0x222222, side: THREE.DoubleSide, roughness: 0.5 })
+    );
+    shade.position.y = -4;
+    lampGroup.add(shade);
+
+    // Bulb
+    const bulb = new THREE.Mesh(
+      new THREE.SphereGeometry(0.2, 16, 16),
+      new THREE.MeshBasicMaterial({ color: 0xffeedd })
+    );
+    bulb.position.y = -4.1;
+    lampGroup.add(bulb);
+
+    // Main Light
+    const spotLight = new THREE.SpotLight(0xffeedd, 3.5, 25, Math.PI / 3.5, 0.4, 1);
+    spotLight.position.set(0, -4.2, 0);
+    // Target is relative to the lamp group
+    spotLight.target.position.set(targetX - x, targetY - y, targetZ - z);
+    spotLight.castShadow = true;
+    spotLight.shadow.bias = -0.001;
+    lampGroup.add(spotLight);
+    lampGroup.add(spotLight.target);
+
+    this.scene.add(lampGroup);
+  }
+
   initThreeJS() {
     this.scene = new THREE.Scene();
     this.scene.fog = new THREE.FogExp2(0x0a0a0a, 0.06);
@@ -149,11 +190,13 @@ export class App implements AfterViewInit, OnDestroy {
     this.canvasContainer.nativeElement.appendChild(this.renderer.domElement);
 
     // Lighting
-    this.scene.add(new THREE.AmbientLight(0x222222));
-    const pointLight = new THREE.PointLight(0xffaa55, 1.2, 20);
-    pointLight.position.set(0, 4, 0);
-    pointLight.castShadow = true;
-    this.scene.add(pointLight);
+    this.scene.add(new THREE.AmbientLight(0x333333)); // Slightly brighter ambient
+    
+    // Hanging Lamp 1 (Crank)
+    this.createHangingLamp(0, 12, -2, 0, 0, -2); // Point straight down at the crank
+
+    // Hanging Lamp 2 (Vending Machine)
+    this.createHangingLamp(5.5, 12, 0, 7.25, 2.5, 0); // Point at the vending machine
 
     // Room
     const room = new THREE.Mesh(
@@ -367,7 +410,16 @@ export class App implements AfterViewInit, OnDestroy {
       this.isLocked = true;
       this.cdr.detectChanges();
     } else {
-      document.body.requestPointerLock();
+      try {
+        const promise = document.body.requestPointerLock() as any;
+        if (promise && typeof promise.catch === 'function') {
+          promise.catch((err: any) => {
+            console.warn('Pointer lock failed:', err);
+          });
+        }
+      } catch (err) {
+        console.warn('Pointer lock failed:', err);
+      }
     }
   }
 
