@@ -199,13 +199,60 @@ export class App implements AfterViewInit, OnDestroy {
     this.createHangingLamp(5.5, 12, 0, 7.25, 2.5, 0); // Point at the vending machine
 
     // Room
+    const brickMat = new THREE.MeshStandardMaterial({ map: this.createBrickTexture(), roughness: 0.9, side: THREE.BackSide });
+    const invisibleMat = new THREE.MeshBasicMaterial({ visible: false, side: THREE.BackSide });
+    
+    // Materials: [Right, Left, Top, Bottom, Front, Back]
+    const roomMaterials = [
+      brickMat,     // +x (Right)
+      invisibleMat, // -x (Left - cut out for bars)
+      brickMat,     // +y (Top)
+      brickMat,     // -y (Bottom)
+      brickMat,     // +z (Front)
+      brickMat      // -z (Back)
+    ];
+
     const room = new THREE.Mesh(
       new THREE.BoxGeometry(16, 12, 16),
-      new THREE.MeshStandardMaterial({ map: this.createBrickTexture(), roughness: 0.9, side: THREE.BackSide })
+      roomMaterials
     );
     room.position.y = 6;
     room.receiveShadow = true;
     this.scene.add(room);
+
+    // Iron Bars (Left Wall)
+    const barsGroup = new THREE.Group();
+    barsGroup.position.set(-8, 0, 0);
+
+    const barGeo = new THREE.CylinderGeometry(0.1, 0.1, 12, 8);
+    const barMat = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.8, roughness: 0.3 });
+
+    // Vertical bars
+    for (let z = -7.5; z < 8; z += 1) {
+      const bar = new THREE.Mesh(barGeo, barMat);
+      bar.position.set(0, 6, z);
+      bar.castShadow = true;
+      bar.receiveShadow = true;
+      barsGroup.add(bar);
+    }
+
+    // Horizontal crossbars
+    const crossBarGeo = new THREE.CylinderGeometry(0.08, 0.08, 16, 8);
+    crossBarGeo.rotateX(Math.PI / 2);
+    
+    const crossBar1 = new THREE.Mesh(crossBarGeo, barMat);
+    crossBar1.position.set(0, 4, 0);
+    crossBar1.castShadow = true;
+    crossBar1.receiveShadow = true;
+    barsGroup.add(crossBar1);
+
+    const crossBar2 = new THREE.Mesh(crossBarGeo, barMat);
+    crossBar2.position.set(0, 8, 0);
+    crossBar2.castShadow = true;
+    crossBar2.receiveShadow = true;
+    barsGroup.add(crossBar2);
+
+    this.scene.add(barsGroup);
 
     // LED Sign
     this.ledCanvas = document.createElement('canvas');
