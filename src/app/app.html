@@ -1,16 +1,18 @@
 <div id="ui">
-    <div id="top-left" class="hud">
+    <div id="top-left" class="hud glass">
         Cranks: <span id="crank-count">{{ Math.floor(revolutions * 8).toLocaleString() }}</span><br>
         <span id="goal" [style.color]="revolutions >= 1000000 ? '#0f0' : '#aaa'">
             {{ revolutions >= 1000000 ? 'GOAL REACHED! YOU ARE FREE!' : 'Goal: 1,000,000' }}
         </span>
     </div>
-    <div id="top-right" class="hud">
+    <div id="top-right" class="hud glass">
         Coins: <span id="coin-count">{{ Math.floor(coins).toLocaleString() }}</span>
     </div>
     <div id="crosshair" [style.transform]="crosshairTransform" [style.background]="crosshairBg"></div>
-    <div id="tooltip" [style.display]="tooltipDisplay">{{ tooltipText }}</div>
+    <div id="tooltip" [style.display]="tooltipDisplay" class="glass">{{ tooltipText }}</div>
 </div>
+
+<div id="caught-overlay" [style.opacity]="caughtEffectIntensity"></div>
 
 <div id="mobile-controls" [style.display]="isMobile && isLocked ? 'block' : 'none'">
     <div id="joystick-base" [style.display]="joyBaseDisplay" [style.left.px]="joyBaseLeft" [style.top.px]="joyBaseTop">
@@ -24,7 +26,7 @@
         <span style="font-size:36px; color: #fff;">JAIL CELL CRANK</span><br><br>
         Click/Tap to Play<br><br>
         <span id="control-text" style="font-size:16px; color:#aaa;">
-            {{ isMobile ? 'Drag left to move | Drag right to look | Tap right to interact' : 'WASD to Move | Mouse to Look | Click objects to interact' }}
+            {{ isMobile ? 'Drag left to move | Drag right to look | Tap right to interact' : 'WASD/Gamepad to Move | Mouse/Gamepad to Look | Click/Gamepad Button to interact' }}
         </span>
     </div>
 </div>

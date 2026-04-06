@@ -1,6 +1,10 @@
 import { Component, ElementRef, ViewChild, AfterViewInit, OnDestroy, HostListener, ChangeDetectorRef, Inject, PLATFORM_ID } from '@angular/core';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { AudioService } from './audio.service';
 import { CommonModule, isPlatformBrowser } from '@angular/common';
 
@@ -44,6 +48,7 @@ export class App implements AfterViewInit, OnDestroy {
   scene!: THREE.Scene;
   camera!: THREE.PerspectiveCamera;
   renderer!: THREE.WebGLRenderer;
+  composer!: EffectComposer;
   animationFrameId: number = 0;
   
   interactables: THREE.Mesh[] = [];
@@ -53,6 +58,12 @@ export class App implements AfterViewInit, OnDestroy {
   ledTexture!: THREE.CanvasTexture;
   ledCtx!: CanvasRenderingContext2D;
   ledCanvas!: HTMLCanvasElement;
+  hangingLamps: THREE.SpotLight[] = [];
+
+  // Effects & Feedback
+  shakeIntensity = 0;
+  caughtEffectIntensity = 0;
+  time = 0;
 
   // Controls
   moveForward = false;
@@ -103,6 +114,10 @@ export class App implements AfterViewInit, OnDestroy {
   particleLifetimes!: Float32Array;
   activeParticles = 0;
 
+  // Gamepad State
+  gamepadButtonPrevPressed = false;
+  gamepadValues = { x: 0, y: 0, lookX: 0, lookY: 0 };
+
   constructor(
     private audioService: AudioService, 
     private cdr: ChangeDetectorRef,
@@ -142,6 +157,9 @@ export class App implements AfterViewInit, OnDestroy {
     cancelAnimationFrame(this.animationFrameId);
     clearInterval(this.autoCrankInterval);
     document.removeEventListener('pointerlockchange', this.onPointerLockChange);
+    if (this.composer) {
+      this.composer.dispose();
+    }
     if (this.renderer) {
       this.renderer.dispose();
     }
@@ -184,48 +202,74 @@ export class App implements AfterViewInit, OnDestroy {
     spotLight.shadow.bias = -0.001;
     lampGroup.add(spotLight);
     lampGroup.add(spotLight.target);
+    this.hangingLamps.push(spotLight);
 
     this.scene.add(lampGroup);
   }
 
   initThreeJS() {
-    this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.FogExp2(0x0a0a0a, 0.06);
+    if (this.renderer) {
+      this.renderer.dispose();
+      const canvas = this.canvasContainer.nativeElement.querySelector('canvas');
+      if (canvas) canvas.remove();
+    }
 
-    this.camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 1000);
+    this.scene = new THREE.Scene();
+    this.scene.background = new THREE.Color(0x0a0a0a); // Atmospheric black
+    this.scene.fog = new THREE.FogExp2(0x0a0a0a, 0.05);
+
+    const width = this.canvasContainer.nativeElement.clientWidth || window.innerWidth;
+    const height = this.canvasContainer.nativeElement.clientHeight || window.innerHeight;
+
+    this.camera = new THREE.PerspectiveCamera(70, width / height, 0.1, 1000);
     this.camera.position.set(0, 2.4, 4);
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    this.renderer.setSize(width, height);
     this.renderer.setClearColor(0x0a0a0a);
-    
-    // Enable shadows
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.toneMapping = THREE.ReinhardToneMapping;
+    this.renderer.toneMappingExposure = 1.0;
 
     this.canvasContainer.nativeElement.appendChild(this.renderer.domElement);
+    
+    // Force a clear color check
+    // Post-processing
+    const renderScene = new RenderPass(this.scene, this.camera);
+    const bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 1.5, 0.4, 0.85);
+    bloomPass.threshold = 0.21;
+    bloomPass.strength = 1.2;
+    bloomPass.radius = 0.55;
+    const outputPass = new OutputPass();
+
+    this.composer = new EffectComposer(this.renderer);
+    this.composer.addPass(renderScene);
+    this.composer.addPass(bloomPass);
+    this.composer.addPass(outputPass);
 
     // Lighting
-    this.scene.add(new THREE.AmbientLight(0x333333)); // Slightly brighter ambient
-    
-    // Hanging Lamp 1 (Crank)
+    this.scene.add(new THREE.AmbientLight(0xffffff, 0.05)); // Atmospheric dark ambient
+
+    this.createHangingLamp(0, 12, 0, 1.5, 5, 0.5); // Center room lamp// Hanging Lamp 1 (Crank)
     this.createHangingLamp(0, 12, -2, 0, 0, -2); // Point straight down at the crank
 
     // Hanging Lamp 2 (Vending Machine)
     this.createHangingLamp(5.5, 12, 0, 7.25, 2.5, 0); // Point at the vending machine
 
-    // Room
     const brickMat = new THREE.MeshStandardMaterial({ map: this.createBrickTexture(), roughness: 0.9, side: THREE.BackSide });
+    const floorMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.8, side: THREE.BackSide });
+    const ceilingMat = new THREE.MeshStandardMaterial({ color: 0x444444, roughness: 1.0, side: THREE.BackSide });
     const invisibleMat = new THREE.MeshBasicMaterial({ visible: false, side: THREE.BackSide });
-    
+
     // Materials: [Right, Left, Top, Bottom, Front, Back]
     const roomMaterials = [
-      brickMat,     // +x (Right)
-      invisibleMat, // -x (Left - cut out for bars)
-      brickMat,     // +y (Top)
-      brickMat,     // -y (Bottom)
-      brickMat,     // +z (Front)
-      brickMat      // -z (Back)
+      brickMat,      // +x (Right)
+      invisibleMat,  // -x (Left - cut out for bars)
+      ceilingMat,    // +y (Top)
+      floorMat,      // -y (Bottom)
+      brickMat,      // +z (Front)
+      brickMat       // -z (Back)
     ];
 
     const room = new THREE.Mesh(
@@ -240,13 +284,11 @@ export class App implements AfterViewInit, OnDestroy {
     const barsGroup = new THREE.Group();
     barsGroup.position.set(-8, 0, 0);
 
-    const barGeo = new THREE.CylinderGeometry(0.1, 0.1, 12, 8);
-    const barMat = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.8, roughness: 0.3 });
-
-    // Vertical bars
-    for (let z = -7.5; z < 8; z += 1) {
+    const barMat = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.8, roughness: 0.3 });
+    const barGeo = new THREE.CylinderGeometry(0.1, 0.1, 12, 16);
+    for (let i = -7.5; i <= 7.5; i += 1.5) {
       const bar = new THREE.Mesh(barGeo, barMat);
-      bar.position.set(0, 6, z);
+      bar.position.set(0, 6, i);
       bar.castShadow = true;
       bar.receiveShadow = true;
       barsGroup.add(bar);
@@ -412,7 +454,12 @@ export class App implements AfterViewInit, OnDestroy {
 
     const hub = new THREE.Mesh(
       new THREE.CylinderGeometry(0.4, 0.4, 0.5, 16),
-      new THREE.MeshStandardMaterial({ color: 0x444, metalness: 0.8, roughness: 0.4 })
+      new THREE.MeshStandardMaterial({ 
+        color: 0x888888, 
+        metalness: 0.5, 
+        roughness: 0.5,
+        emissive: 0x222222
+      })
     );
     hub.castShadow = true;
     this.rotator.add(hub);
@@ -427,7 +474,12 @@ export class App implements AfterViewInit, OnDestroy {
 
     const handle = new THREE.Mesh(
       new THREE.CylinderGeometry(0.1, 0.1, 0.8, 16),
-      new THREE.MeshStandardMaterial({ color: 0x050505, roughness: 0.2 })
+      new THREE.MeshStandardMaterial({ 
+        color: 0x333333, 
+        metalness: 0.5, 
+        roughness: 0.5,
+        emissive: 0x111111
+      })
     );
     handle.position.set(0, 0.4, 2.3);
     handle.castShadow = true;
@@ -449,7 +501,7 @@ export class App implements AfterViewInit, OnDestroy {
     this.scene.add(vendingGroup);
 
     const loader = new GLTFLoader();
-    loader.load('/vending.glb', (gltf: any) => {
+    loader.load('vending.glb', (gltf: any) => {
       const model = gltf.scene;
       // Scale it if needed, assuming it's roughly 1x1x1 or similar
       // Let's try to fit it to the previous size (4.5 wide, 5 high, 1.5 deep)
@@ -475,9 +527,10 @@ export class App implements AfterViewInit, OnDestroy {
     }, undefined, (error: any) => {
       console.error('Error loading vending.glb:', error);
       // Fallback to procedural body if GLB fails
+      // Fallback TO THE FALLBACK: Ensure it is REALLY BRIGHT
       const vmBody = new THREE.Mesh(
         new THREE.BoxGeometry(4.5, 5, 1.5),
-        new THREE.MeshStandardMaterial({ color: 0x551111, roughness: 0.6 })
+        new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.5, roughness: 0.5 })
       );
       vmBody.position.y = 2.5;
       vmBody.castShadow = true;
@@ -612,7 +665,7 @@ export class App implements AfterViewInit, OnDestroy {
 
   @HostListener('document:mousemove', ['$event'])
   onMouseMove(e: MouseEvent) {
-    if (this.isLocked && !this.isMobile) {
+    if (this.isLocked) {
       this.euler.setFromQuaternion(this.camera.quaternion);
       this.euler.y -= e.movementX * 0.002;
       this.euler.x -= e.movementY * 0.002;
@@ -623,7 +676,7 @@ export class App implements AfterViewInit, OnDestroy {
 
   @HostListener('document:mousedown', ['$event'])
   onMouseDown(e: MouseEvent) {
-    if (!this.isLocked || this.isMobile) return;
+    if (!this.isLocked) return;
     if (e.button === 0) this.fireInteraction();
   }
 
@@ -724,10 +777,13 @@ export class App implements AfterViewInit, OnDestroy {
 
   @HostListener('window:resize', ['$event'])
   onResize(event?: Event) {
-    if (this.camera && this.renderer) {
-      this.camera.aspect = window.innerWidth / window.innerHeight;
+    if (this.camera && this.renderer && this.composer) {
+      const width = this.canvasContainer.nativeElement.clientWidth;
+      const height = this.canvasContainer.nativeElement.clientHeight;
+      this.camera.aspect = width / height;
       this.camera.updateProjectionMatrix();
-      this.renderer.setSize(window.innerWidth, window.innerHeight);
+      this.renderer.setSize(width, height);
+      this.composer.setSize(width, height);
     }
   }
 
@@ -769,6 +825,10 @@ export class App implements AfterViewInit, OnDestroy {
     
     this.updateLedSign();
     this.cdr.detectChanges();
+    
+    // Trigger intense camera shake
+    this.shakeIntensity = 1.5;
+    this.caughtEffectIntensity = 1.0;
   }
 
   fireInteraction() {
@@ -790,10 +850,12 @@ export class App implements AfterViewInit, OnDestroy {
           this.targetRotation -= (Math.PI / 4) * this.crankPower;
           this.audioService.playSound('crank');
           this.spawnParticles(intersects[0].point, 5, 0xffaa00);
+          this.shakeIntensity = 0.15; // Subtle shake on crank
           
           if (!wasGoalReached && this.revolutions >= 1000000) {
               this.audioService.playSound('goal');
               this.spawnParticles(intersects[0].point, 50, 0x00ff00);
+              this.shakeIntensity = 1.0; // Big shake on goal
           }
         } else if (type === 'upgrade_power') {
           if (this.coins >= this.costs.power) { this.coins -= this.costs.power; this.crankPower++; this.costs.power = Math.floor(this.costs.power * 1.5); this.audioService.playSound('buy'); this.spawnParticles(intersects[0].point, 10, 0xff4444); }
@@ -813,11 +875,65 @@ export class App implements AfterViewInit, OnDestroy {
     }
   }
 
+  handleGamepadInput() {
+    const gamepads = navigator.getGamepads();
+    const gp = gamepads[0];
+    if (gp) {
+      // Sticks
+      const leftX = gp.axes[0];
+      const leftY = gp.axes[1];
+      const rightX = gp.axes[2];
+      const rightY = gp.axes[3];
+
+      // Deadzone and mapping
+      this.gamepadValues.x = Math.abs(leftX) > 0.1 ? leftX : 0;
+      this.gamepadValues.y = Math.abs(leftY) > 0.1 ? leftY : 0;
+      this.gamepadValues.lookX = Math.abs(rightX) > 0.1 ? rightX : 0;
+      this.gamepadValues.lookY = Math.abs(rightY) > 0.1 ? rightY : 0;
+
+      // Rotation (Right Stick)
+      if (this.gamepadValues.lookX || this.gamepadValues.lookY) {
+        this.euler.setFromQuaternion(this.camera.quaternion);
+        this.euler.y -= this.gamepadValues.lookX * 0.04;
+        this.euler.x -= this.gamepadValues.lookY * 0.04;
+        this.euler.x = Math.max(-Math.PI/2, Math.min(Math.PI/2, this.euler.x));
+        this.camera.quaternion.setFromEuler(this.euler);
+      }
+
+      // Interaction (Button 0 - A/Cross, Button 1 - B/Circle)
+      const interactPressed = gp.buttons[0].pressed || gp.buttons[1].pressed;
+      if (interactPressed && !this.gamepadButtonPrevPressed) {
+        this.fireInteraction();
+      }
+      this.gamepadButtonPrevPressed = interactPressed;
+    } else {
+      this.gamepadValues.x = 0;
+      this.gamepadValues.y = 0;
+    }
+  }
+
   animate = () => {
     this.animationFrameId = requestAnimationFrame(this.animate);
     const time = performance.now();
     const delta = (time - this.prevTime) / 1000;
     this.prevTime = time;
+    this.time += delta;
+
+    // Effects
+    // 1. Lamp Flickering
+    this.hangingLamps.forEach(lamp => {
+      if (Math.random() > 0.985) {
+        lamp.intensity = 0.5 + Math.random() * 4.0;
+      } else {
+        lamp.intensity += (3.5 - lamp.intensity) * 0.15;
+      }
+    });
+
+    // 2. Caught Effect Decay
+    if (this.caughtEffectIntensity > 0) {
+      this.caughtEffectIntensity *= 0.96;
+      if (this.caughtEffectIntensity < 0.01) this.caughtEffectIntensity = 0;
+    }
 
     // Checkpoint Logic
     if (this.revolutions - this.lastCheckpoint >= this.checkpointInterval) {
@@ -868,18 +984,29 @@ export class App implements AfterViewInit, OnDestroy {
       }
     }
 
+    // 1. Reset base camera height and clamp bounds (Fix runaway camera bug)
+    const baseHeight = 2.4;
+    this.camera.position.x = Math.max(-7.2, Math.min(7.2, this.camera.position.x));
+    this.camera.position.z = Math.max(-7.2, Math.min(7.2, this.camera.position.z));
+    
+    // 2. Add breathing offset to base height
+    this.camera.position.y = baseHeight + Math.sin(this.time * 0.8) * 0.04; 
+    this.camera.position.y += this.shakeIntensity * (Math.random() - 0.5);
+
     if (this.isLocked) {
+      this.handleGamepadInput();
+
       this.velocity.x -= this.velocity.x * 10.0 * delta;
       this.velocity.z -= this.velocity.z * 10.0 * delta;
 
       if (this.isMobile) {
-        this.direction.z = -this.joyVector.y;
-        this.direction.x = this.joyVector.x;
+        this.direction.z = -this.joyVector.y - this.gamepadValues.y;
+        this.direction.x = this.joyVector.x + this.gamepadValues.x;
       } else {
-        this.direction.z = Number(this.moveForward) - Number(this.moveBackward);
-        this.direction.x = Number(this.moveRight) - Number(this.moveLeft);
-        this.direction.normalize();
+        this.direction.z = Number(this.moveForward) - Number(this.moveBackward) - this.gamepadValues.y;
+        this.direction.x = Number(this.moveRight) - Number(this.moveLeft) + this.gamepadValues.x;
       }
+      this.direction.normalize();
 
       const speed = 25.0;
       if (this.direction.z !== 0) this.velocity.z -= this.direction.z * speed * delta;
@@ -887,10 +1014,16 @@ export class App implements AfterViewInit, OnDestroy {
 
       this.camera.translateX(-this.velocity.x * delta);
       this.camera.translateZ(this.velocity.z * delta);
+    }
 
-      this.camera.position.y = 2.4;
-      this.camera.position.x = Math.max(-7.2, Math.min(7.2, this.camera.position.x));
-      this.camera.position.z = Math.max(-7.2, Math.min(7.2, this.camera.position.z));
+    // 2. Camera Breathing & Shake (Applied after base height is fixed)
+    this.camera.position.y += Math.sin(this.time * 0.8) * 0.04; // Breathing
+    
+    if (this.shakeIntensity > 0) {
+      this.camera.position.x += (Math.random() - 0.5) * this.shakeIntensity;
+      this.camera.position.y += (Math.random() - 0.5) * this.shakeIntensity;
+      this.shakeIntensity *= 0.92;
+      if (this.shakeIntensity < 0.005) this.shakeIntensity = 0;
     }
 
     if (this.isLocked) {
@@ -960,7 +1093,10 @@ export class App implements AfterViewInit, OnDestroy {
     }
     this.particleGeometry.setDrawRange(0, this.activeParticles);
 
-    if (this.renderer && this.scene && this.camera) {
+    // Final Render
+    if (this.composer) {
+      this.composer.render();
+    } else if (this.renderer && this.scene && this.camera) {
       this.renderer.render(this.scene, this.camera);
     }
   };
